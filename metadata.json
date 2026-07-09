@@ -1,0 +1,6 @@
+{
+  "name": "English House Portal",
+  "description": "Premium LMS platform for English teachers and students by Mr. Mohamed Salah, featuring drag-and-drop auto-correct tests, video limits, and student dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
