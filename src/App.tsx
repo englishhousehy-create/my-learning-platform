@@ -1,19 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import AuthScreen from './components/AuthScreen';
-import StudentDashboard from './components/StudentDashboard';
-import TeacherDashboard from './components/TeacherDashboard';
-import { User } from './types';
-import { GraduationCap } from 'lucide-react';
-import { Language } from './translations';
-
-export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [lang, setLang] = useState<Language>(() => {
-    return (localStorage.getItem('english_portal_lang') as Language) || 'en';
-  });
-
-  useEffect(() => {
+ useEffect(() => {
     // Check if session exists in localStorage
     const cached = localStorage.getItem('english_portal_user');
     if (cached) {
