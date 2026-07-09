@@ -74,22 +74,29 @@ export default function StudentDashboard({ student, onLogout, lang, setLang }: S
       }
 
       // Filter data by student grade, visibility, and trial status
+      const isGradeMatch = (itemGrade: any) => {
+        if (itemGrade === undefined || itemGrade === null || student.grade === undefined || student.grade === null) {
+          return false;
+        }
+        return String(itemGrade).trim().toLowerCase() === String(student.grade).trim().toLowerCase();
+      };
+
       const filteredVideos = (vData.videos || []).filter(
-        (v: VideoType) => v.grade === student.grade && v.visible && (!v.isTrial || student.isTrial)
+        (v: VideoType) => isGradeMatch(v.grade) && v.visible && (!v.isTrial || student.isTrial)
       );
       const filteredTests = (tData.tests || []).filter(
-        (t: TestType) => t.grade === student.grade && t.visible && (!t.isTrial || student.isTrial)
+        (t: TestType) => isGradeMatch(t.grade) && t.visible && (!t.isTrial || student.isTrial)
       );
       const filteredBooks = (bData.books || []).filter(
-        (b: Book) => b.grade === student.grade && (!b.isTrial || student.isTrial)
+        (b: Book) => isGradeMatch(b.grade) && (!b.isTrial || student.isTrial)
       );
       const filteredWords = (wData.words || []).filter(
-        (w: Word) => w.grade === student.grade && (!w.isTrial || student.isTrial)
+        (w: Word) => isGradeMatch(w.grade) && (!w.isTrial || student.isTrial)
       );
 
       // Filter announcements: visible and matches student's grade (or 0 for all grades)
-      const filteredAnnouncements = (annData || []).filter(
-        (ann: Announcement) => ann.visible && (ann.grade === 0 || ann.grade === student.grade)
+      const filteredAnnouncements = (annData.announcements || []).filter(
+        (ann: Announcement) => ann.visible && (Number(ann.grade) === 0 || isGradeMatch(ann.grade))
       );
 
       // User attempts & view counts

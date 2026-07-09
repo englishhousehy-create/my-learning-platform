@@ -4,6 +4,10 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { fileURLToPath } from 'url';
+import { MongoClient } from 'mongodb';
+import pg from 'pg';
+
+const { Client: PgClient } = pg;
 
 // Define __dirname and __filename equivalent safely for both ESM and CJS formats
 const getModulePaths = () => {
@@ -65,7 +69,128 @@ const DEFAULT_AVATARS = [
   'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=150'
 ];
 
-const INITIAL_DB = {
+interface User {
+  id: string;
+  username?: string;
+  name: string;
+  phone: string;
+  password?: string;
+  role: 'student' | 'teacher' | 'admin';
+  status: 'active' | 'pending' | 'suspended';
+  avatar: string;
+  grade?: number;
+  approvedUntil?: string | null;
+  isTrial?: boolean;
+  createdAt: string;
+}
+
+interface VideoType {
+  id: string;
+  title: string;
+  description: string;
+  youtubeUrl: string;
+  youtubeId: string;
+  grade: number;
+  visible: boolean;
+  maxViews: number | 'unlimited';
+  order: number;
+  isTrial?: boolean;
+  createdAt: string;
+}
+
+interface TestType {
+  id: string;
+  title: string;
+  description: string;
+  type: 'drag-drop' | 'html';
+  content: string;
+  grade: number;
+  visible: boolean;
+  maxAttempts: number | 'unlimited';
+  isTrial?: boolean;
+  order: number;
+  createdAt: string;
+}
+
+interface Book {
+  id: string;
+  title: string;
+  description: string;
+  fileUrl: string;
+  grade: number;
+  isTrial?: boolean;
+  createdAt: string;
+}
+
+interface Word {
+  id: string;
+  word: string;
+  meaning: string;
+  translation: string;
+  partOfSpeech: string;
+  example: string;
+  grade: number;
+  isTrial?: boolean;
+  createdAt: string;
+}
+
+interface Announcement {
+  id: string;
+  title: string;
+  content: string;
+  grade: number;
+  type: string;
+  visible: boolean;
+  createdAt: string;
+}
+
+interface NotificationType {
+  id: string;
+  type: 'student_registration';
+  message: string;
+  data: any;
+  read: boolean;
+  createdAt: string;
+}
+
+interface StudentLog {
+  id: string;
+  userId: string;
+  videoId: string;
+  viewedAt: string;
+  viewCount: number;
+}
+
+interface TestAttempt {
+  id: string;
+  userId: string;
+  testId: string;
+  score: number;
+  totalPoints: number;
+  answers: any;
+  solvedAt: string;
+  attemptNumber: number;
+}
+
+interface Settings {
+  mohamedSalahPicture: string;
+  hagarAfifiPicture: string;
+}
+
+interface DatabaseType {
+  users: User[];
+  videos: VideoType[];
+  tests: TestType[];
+  books: Book[];
+  words: Word[];
+  notifications: NotificationType[];
+  studentLogs: StudentLog[];
+  testAttempts: TestAttempt[];
+  announcements: Announcement[];
+  settings: Settings;
+}
+
+const INITIAL_DB: DatabaseType = {
   users: [
     {
       id: 'admin-salah',
@@ -360,34 +485,149 @@ const INITIAL_DB = {
   }
 };
 
-// Database utility functions
-function readDb() {
+// Database Cache in-memory
+let dbCache: typeof INITIAL_DB = INITIAL_DB;
+let isDbLoaded = false;
+let dbType: 'json' | 'mongodb' | 'postgres' = 'json';
+
+let mongoClient: any = null;
+let pgClient: any = null;
+
+async function initDatabase() {
+  const mongoUri = process.env.MONGODB_URI;
+  const pgUri = process.env.DATABASE_URL;
+
+  if (mongoUri) {
+    try {
+      console.log('Connecting to MongoDB database...');
+      const client = new MongoClient(mongoUri, { connectTimeoutMS: 5000 });
+      await client.connect();
+      mongoClient = client;
+      dbType = 'mongodb';
+      console.log('Successfully connected to MongoDB!');
+
+      const db = client.db('education_platform');
+      const collection = db.collection('app_state');
+      const doc = await collection.findOne({ _id: 'main_db' as any });
+
+      if (doc && doc.data) {
+        dbCache = doc.data;
+        if (!dbCache.settings) {
+          dbCache.settings = INITIAL_DB.settings;
+        }
+        console.log('Loaded database state from MongoDB.');
+      } else {
+        await collection.updateOne(
+          { _id: 'main_db' as any },
+          { $set: { data: INITIAL_DB } },
+          { upsert: true }
+        );
+        dbCache = INITIAL_DB;
+        console.log('Initialized MongoDB with default database state.');
+      }
+      isDbLoaded = true;
+      return;
+    } catch (err) {
+      console.error('Failed to connect to MongoDB, falling back to other methods:', err);
+    }
+  }
+
+  if (pgUri) {
+    try {
+      console.log('Connecting to PostgreSQL database...');
+      const client = new PgClient({
+        connectionString: pgUri,
+        connectionTimeoutMillis: 5000,
+        ssl: pgUri.includes('localhost') ? false : { rejectUnauthorized: false }
+      });
+      await client.connect();
+      pgClient = client;
+      dbType = 'postgres';
+      console.log('Successfully connected to PostgreSQL!');
+
+      // Create table if not exists
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS platform_data (
+          key VARCHAR(50) PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `);
+
+      const res = await client.query('SELECT value FROM platform_data WHERE key = $1', ['db_state']);
+      if (res.rows.length > 0) {
+        dbCache = JSON.parse(res.rows[0].value);
+        if (!dbCache.settings) {
+          dbCache.settings = INITIAL_DB.settings;
+        }
+        console.log('Loaded database state from PostgreSQL.');
+      } else {
+        await client.query(
+          'INSERT INTO platform_data (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+          ['db_state', JSON.stringify(INITIAL_DB)]
+        );
+        dbCache = INITIAL_DB;
+        console.log('Initialized PostgreSQL table with default database state.');
+      }
+      isDbLoaded = true;
+      return;
+    } catch (err) {
+      console.error('Failed to connect to PostgreSQL, falling back to local file:', err);
+    }
+  }
+
+  // Fallback to local file
+  dbType = 'json';
+  console.log('Using local JSON file for database persistence:', DB_FILE);
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DB, null, 2), 'utf-8');
-    return INITIAL_DB;
-  }
-  try {
-    const data = fs.readFileSync(DB_FILE, 'utf-8');
-    const db = JSON.parse(data);
-    if (!db.settings) {
-      db.settings = {
-        mohamedSalahPicture: '/src/assets/images/mohamed_salah_avatar_1783203726731.jpg',
-        hagarAfifiPicture: '/src/assets/images/hagar_afifi_avatar_1783203738368.jpg'
-      };
-      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    dbCache = INITIAL_DB;
+  } else {
+    try {
+      const data = fs.readFileSync(DB_FILE, 'utf-8');
+      dbCache = JSON.parse(data);
+      if (!dbCache.settings) {
+        dbCache.settings = INITIAL_DB.settings;
+        fs.writeFileSync(DB_FILE, JSON.stringify(dbCache, null, 2), 'utf-8');
+      }
+    } catch (err) {
+      console.error('Error reading database file, using INITIAL_DB:', err);
+      dbCache = INITIAL_DB;
     }
-    return db;
-  } catch (err) {
-    console.error('Error reading database file:', err);
-    return INITIAL_DB;
   }
+  isDbLoaded = true;
+}
+
+// Database utility functions
+function readDb() {
+  return dbCache;
 }
 
 function writeDb(data: typeof INITIAL_DB) {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error writing database file:', err);
+  dbCache = data;
+
+  if (dbType === 'mongodb' && mongoClient) {
+    const db = mongoClient.db('education_platform');
+    const collection = db.collection('app_state');
+    collection.updateOne(
+      { _id: 'main_db' },
+      { $set: { data: data } },
+      { upsert: true }
+    ).catch(err => {
+      console.error('Failed to write database to MongoDB in background:', err);
+    });
+  } else if (dbType === 'postgres' && pgClient) {
+    pgClient.query(
+      'INSERT INTO platform_data (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
+      ['db_state', JSON.stringify(data)]
+    ).catch((err: any) => {
+      console.error('Failed to write database to PostgreSQL in background:', err);
+    });
+  } else {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error writing database file:', err);
+    }
   }
 }
 
@@ -396,7 +636,7 @@ async function startServer() {
   app.use(express.json({ limit: '15mb' }));
 
   // Ensure DB is initialized
-  readDb();
+  await initDatabase();
 
   // Helper to generate IDs
   const genId = () => Math.random().toString(36).substring(2, 11);
